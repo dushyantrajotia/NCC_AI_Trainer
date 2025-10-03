@@ -1,16 +1,72 @@
 #root {
   max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
+  margin: 2rem auto;
+  padding: 1rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
   text-align: center;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
+header {
+  padding: 2rem;
+  background-color: rgba(36, 36, 36, 0.95);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  border-radius: 1rem;
 }
+
+/* Header content flex */
+.header-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.card {
+  padding: 2rem;
+  background-color: rgba(36, 36, 36, 0.85);
+  border-radius: 1rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+input[type="file"] {
+  padding: 0.6rem 1rem;
+  border-radius: 0.6rem;
+  border: 1px solid #646cff44;
+  background-color: #1a1a1a;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+}
+
+input[type="file"]:hover {
+  border-color: #646cff;
+}
+
+.feedback-box {
+  background-color: #1a1a1a;
+  border-radius: 0.6rem;
+  padding: 1rem 1.5rem;
+  border: 1px solid #646cff44;
+  white-space: pre-wrap;
+  color: #ffffff;
+  font-family: 'Courier New', Courier, monospace;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.logo {
+  height: 60px;
+  width: auto;
+  padding: 0;
+  transition: filter 0.3s ease;
+}
+
 .logo:hover {
   filter: drop-shadow(0 0 2em #646cffaa);
 }
@@ -19,12 +75,8 @@
 }
 
 @keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -33,10 +85,24 @@
   }
 }
 
-.card {
-  padding: 2em;
+@media (max-width: 768px) {
+  header h1 {
+    font-size: 2rem;
+  }
+  button, input[type="file"] {
+    width: 90%;
+  }
+  .feedback-box {
+    font-size: 0.9rem;
+  }
 }
 
-.read-the-docs {
-  color: #888;
+@media (max-width: 480px) {
+  header h1 {
+    font-size: 1.6rem;
+  }
+  .feedback-box {
+    font-size: 0.85rem;
+    padding: 0.75rem 1rem;
+  }
 }
