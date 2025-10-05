@@ -4,7 +4,7 @@ import sys
 import math
 import os
 import uuid
-import base64 # <-- ENSURING THIS IS EXPLICITLY HERE
+import base64 
 
 # --- IMPORT FIX ---
 try:
@@ -168,7 +168,6 @@ def analyze_high_leg_march(video_path, analysis_dir):
                 knee_height_ok = active_knee[1] <= active_hip[1] + HIGH_LEG_Y_TOLERANCE 
 
                 # --- 2. KNEE ANGLE CHECK (Active Leg) ---
-                # Note: We must ensure we pass the correct shoulder for angle calculation (L_SHLDR for L leg, R_SHLDR for R leg)
                 shldr_for_active_leg = l_shldr if is_left_lifted else r_shldr
                 
                 hip_flexion_angle = calculate_angle(shldr_for_active_leg, active_hip, active_knee) 
@@ -220,7 +219,9 @@ def analyze_high_leg_march(video_path, analysis_dir):
 
     # Choose the most relevant frame to display
     frame_to_use = None
-    if knee_height_succeeded and knee_angle_succeeded and stationary_leg_succeeded:
+    overall_correct = (knee_height_succeeded and knee_angle_succeeded and stationary_leg_succeeded)
+    
+    if overall_correct:
         frame_to_use = best_success_frame
         final_fail_points = [] 
     else:
@@ -239,31 +240,43 @@ def analyze_high_leg_march(video_path, analysis_dir):
         _, buffer = cv2.imencode('.jpg', annotated_image)
         image_b64_data.append(f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}")
     
-    # --- FINAL TEXT REPORT GENERATION ---
-    feedback_lines = [f"\n"]
-    
-    overall_correct = (knee_height_succeeded and knee_angle_succeeded and stationary_leg_succeeded)
+    # --- FINAL TEXT REPORT GENERATION (COACHING STYLE) ---
+    feedback_lines = []
     
     if overall_correct:
+        feedback_lines.append(f"🌟 **Excellent Drill!** Your High Leg March posture is correct and rigid.")
         feedback_lines.append("✅ OVERALL: PERFECT HIGH LEG MARCH POSTURE ACHIEVED.")
     else:
-        feedback_lines.append("❌ OVERALL: PERFECT HIGH LEG MARCH POSTURE NOT DETECTED.")
-    feedback_lines.append("\n- COMPONENT BREAKDOWN -")
+        # --- DYNAMIC COACHING MESSAGE ---
+        failure_messages = []
+        
+        if not knee_height_succeeded:
+            failure_messages.append("Knee Height (needs more lift).")
+        if not knee_angle_succeeded:
+            failure_messages.append("Active Leg Angle (check 90° bend).")
+        if not stationary_leg_succeeded:
+            failure_messages.append("Stationary Leg (keep it locked straight).")
+
+        feedback_lines.append(f"❌ **Action Required!** Your High Leg March posture is incorrect.")
+        feedback_lines.append(f"The primary areas needing attention are: **{', '.join(failure_messages)}**.")
+        feedback_lines.append("Please look at the red lines on the annotated image for guidance.")
+
+    feedback_lines.append("\n--- COMPONENT BREAKDOWN ---")
 
     if knee_height_succeeded:
         feedback_lines.append(f"✅ Knee Height: Knee was lifted to the required hip/waist level.")
     else:
-        feedback_lines.append(f"❌ Knee Height: Knee was not lifted high enough (highlighted in red). Target height shown in green.")
+        feedback_lines.append(f"❌ Knee Height: Your knee was not lifted high enough. **Aim to touch the green target line!**")
 
     if knee_angle_succeeded:
         feedback_lines.append(f"✅ Active Leg Angle: Thigh was parallel to the ground and knee bent ~90°.")
     else:
-        feedback_lines.append(f"❌ Active Leg Angle: Knee angle was incorrect (not close to 90° or thigh not horizontal).")
+        feedback_lines.append(f"❌ Active Leg Angle: The angle of your active leg is incorrect. Ensure the thigh is horizontal and the shin is vertical.")
 
     if stationary_leg_succeeded:
         feedback_lines.append("✅ Stationary Leg: Support leg remained straight and locked.")
     else:
-        feedback_lines.append("❌ Stationary Leg: Support leg was bent or unstable.")
+        feedback_lines.append("❌ Stationary Leg: Your support leg was bent or unstable. **Brace that knee!**")
         
     final_text_report = "\n".join(feedback_lines)
 

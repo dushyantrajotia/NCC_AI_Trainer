@@ -1,5 +1,5 @@
 import cv2
-import mediapipe as mp # <-- Core MediaPipe import is here
+import mediapipe as mp
 import sys
 import math
 import os
@@ -7,32 +7,30 @@ import uuid
 import base64
 
 # --- IMPORT FIX ---
+# CRITICAL FIX: Simplify to standard relative import for package use.
 try:
-    # Tries the relative import (Used by Flask/app.py)
     from .src.pose_utils import calculate_angle 
 except ImportError:
+    # Fallback/testing logic remains minimal
     try:
-        # Falls back to direct import (Used when running 'python salute_analysis.py' directly)
         from src.pose_utils import calculate_angle 
     except ImportError:
-        # If both fail, terminate and print the error
         print("FATAL ERROR: Could not import calculate_angle from pose_utils.py. Ensure pose_utils.py is in the 'src/drills' directory.")
         sys.exit(1)
 
 # Initialize MediaPipe Pose Drawing Utilities and Model
-# 🚨 CORRECTED POSITION: Runs AFTER 'import mediapipe as mp'
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
 # --- DEFINED CONSTANTS (Tolerances for Drill Accuracy) ---
 # FINGER PLACEMENT (Index finger touching the temple/eyebrow)
-FINGER_Y_ALIGNMENT_TOLERANCE = 0.04 # Max vertical deviation from target (eye line)
-FINGER_X_ALIGNMENT_TOLERANCE = 0.06 # Max horizontal deviation (pushes placement closer to temple)
+FINGER_Y_ALIGNMENT_TOLERANCE = 0.04 
+FINGER_X_ALIGNMENT_TOLERANCE = 0.06 
 
 # HAND FORM AND ARM RIGIDITY
-WRIST_RIGIDITY_MIN_ANGLE = 160 # Angle at the wrist (Elbow-Wrist-Index) for rigidity.
-ELBOW_RAISE_ANGLE_RANGE = (160, 180) # Arm must be nearly straight and rigid
+WRIST_RIGIDITY_MIN_ANGLE = 160 
+ELBOW_RAISE_ANGLE_RANGE = (160, 180) 
 
 # --- DRAWING UTILITY FUNCTION (Shared) ---
 def draw_and_annotate(image, landmarks, fail_points, drill_name):
@@ -207,7 +205,9 @@ def analyze_salute(video_path, analysis_dir):
 
     # Choose the most relevant frame to display
     frame_to_use = None
-    if finger_placement_succeeded and hand_form_succeeded and elbow_raise_succeeded:
+    overall_correct = (finger_placement_succeeded and hand_form_succeeded and elbow_raise_succeeded)
+    
+    if overall_correct:
         frame_to_use = best_success_frame
         final_fail_points = [] 
     else:
@@ -226,31 +226,43 @@ def analyze_salute(video_path, analysis_dir):
         _, buffer = cv2.imencode('.jpg', annotated_image)
         image_b64_data.append(f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}")
     
-    # --- FINAL TEXT REPORT GENERATION ---
-    feedback_lines = [f"\n"]
-    
-    overall_correct = (finger_placement_succeeded and hand_form_succeeded and elbow_raise_succeeded)
+    # --- FINAL TEXT REPORT GENERATION (COACHING STYLE) ---
+    feedback_lines = []
     
     if overall_correct:
+        feedback_lines.append(f"🌟 **Outstanding Salute!** Your posture is precise, rigid, and meets all required standards.")
         feedback_lines.append("✅ OVERALL: PERFECT SALUTE POSTURE DETECTED.")
     else:
-        feedback_lines.append("❌ OVERALL: PERFECT SALUTE POSTURE NOT DETECTED.")
-    feedback_lines.append("\n- COMPONENT BREAKDOWN -")
+        # --- DYNAMIC COACHING MESSAGE ---
+        failure_messages = []
+        
+        if not finger_placement_succeeded:
+            failure_messages.append("Finger Placement (index finger position).")
+        if not hand_form_succeeded:
+            failure_messages.append("Hand Form (wrist rigidity/straightness).")
+        if not elbow_raise_succeeded:
+            failure_messages.append("Arm Rigidity (elbow angle/straightness).")
+
+        feedback_lines.append(f"❌ **Action Required!** Your Salute needs immediate correction.")
+        feedback_lines.append(f"The primary areas needing attention are: **{', '.join(failure_messages)}**.")
+        feedback_lines.append("Review the annotated image (red highlights) for adjustment guidance.")
+
+    feedback_lines.append("\n--- COMPONENT BREAKDOWN ---")
 
     if finger_placement_succeeded:
         feedback_lines.append("✅ Finger Placement: Index finger successfully touched the required area (temple/eyebrow).")
     else:
-        feedback_lines.append("❌ Finger Placement: Index finger was consistently off target (highlighted in red). Target spot shown in green.")
+        feedback_lines.append("❌ Finger Placement: Index finger was consistently off target. **Aim for the green target spot!**")
 
     if hand_form_succeeded:
         feedback_lines.append(f"✅ Hand Form: Hand segment was rigid (angle at wrist > {WRIST_RIGIDITY_MIN_ANGLE}°), inferring joined fingers.")
     else:
-        feedback_lines.append(f"❌ Hand Form: Hand segment was not rigid (angle at wrist < {WRIST_RIGIDITY_MIN_ANGLE}°).")
+        feedback_lines.append(f"❌ Hand Form: Your hand segment was not rigid. **Keep your wrist locked and fingers straight and joined.**")
 
     if elbow_raise_succeeded:
         feedback_lines.append("✅ Arm Rigidity: Elbow angle was straight and rigid (within the 160°-180° range).")
     else:
-        feedback_lines.append("❌ Arm Rigidity: Elbow was too bent, breaking the required straight line of the arm.")
+        feedback_lines.append("❌ Arm Rigidity: Your elbow was too bent. **Ensure the upper arm and forearm form a near-straight, rigid line.**")
         
     final_text_report = "\n".join(feedback_lines)
 

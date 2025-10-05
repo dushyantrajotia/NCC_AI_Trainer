@@ -15,6 +15,7 @@ except ImportError:
         # Falls back to direct import (Used when running 'python turns_analysis.py' directly)
         from src.pose_utils import calculate_angle 
     except ImportError:
+        # If both fail, terminate and print the error
         print("FATAL ERROR: Could not import calculate_angle from pose_utils.py. Ensure pose_utils.py is in the 'src/drills' directory.")
         sys.exit(1)
 
@@ -124,8 +125,9 @@ def analyze_turn_logic(video_path, analysis_dir, drill_name):
             
             current_frame_fail_points = []
 
-            if results.pose_landmarks:
-                lm = results.pose_landmarks.landmark
+            if results.pose_landmarks: # CHECK IF LANDMARKS ARE PRESENT
+                # 🚨 FIX APPLIED HERE: Correct access path: results.pose_landmarks.landmark
+                lm = results.pose_landmarks.landmark 
                 last_known_landmarks = results.pose_landmarks
                 
                 # --- Landmark Extraction ---
@@ -150,7 +152,6 @@ def analyze_turn_logic(video_path, analysis_dir, drill_name):
 
 
                 # --- 1. HEEL DISENGAGEMENT CHECK (Initial Pivot) ---
-                # Check if the heel lifts before the active snap (toe Y > heel Y)
                 if moving_toe[1] - moving_heel[1] > HEEL_LIFT_MIN_DIFF:
                     heel_disengagement_detected = True 
 
@@ -202,7 +203,9 @@ def analyze_turn_logic(video_path, analysis_dir, drill_name):
 
     # Choose the most relevant frame to display
     frame_to_use = None
-    if heel_disengagement_detected and snap_motion_detected and final_snap_achieved:
+    overall_correct = (heel_disengagement_detected and snap_motion_detected and final_snap_achieved)
+    
+    if overall_correct:
         frame_to_use = best_success_frame
         final_fail_points = [] 
     else:
@@ -221,35 +224,48 @@ def analyze_turn_logic(video_path, analysis_dir, drill_name):
         _, buffer = cv2.imencode('.jpg', annotated_image)
         image_b64_data.append(f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}")
     
-    # --- FINAL TEXT REPORT GENERATION ---
-    feedback_lines = [f"\n"]
-    
-    overall_correct = (heel_disengagement_detected and snap_motion_detected and final_snap_achieved)
+    # --- FINAL TEXT REPORT GENERATION (COACHING STYLE) ---
+    feedback_lines = []
     
     if overall_correct:
+        feedback_lines.append(f"🌟 **Excellent Turn!** Your {drill_name} was performed with precision and a crisp snap.")
         feedback_lines.append("✅ OVERALL: TURN EXECUTED CORRECTLY.")
     else:
-        feedback_lines.append("❌ OVERALL: TURN EXECUTION FAILED.")
+        # --- DYNAMIC COACHING MESSAGE ---
+        failure_messages = []
+        
+        if not heel_disengagement_detected:
+            failure_messages.append("Heel Disengagement (moving heel lifted too flat or dragged).")
+        if not snap_motion_detected:
+            failure_messages.append("Snap Motion (moving foot lacked the necessary lift/bend).")
+        if not final_snap_achieved:
+            failure_messages.append("Final Position (feet were unsnapped or legs were bent).")
+
+        feedback_lines.append(f"❌ **Action Required!** Your {drill_name} needs immediate correction.")
+        feedback_lines.append(f"The primary areas needing attention are: **{', '.join(failure_messages)}**.")
+        feedback_lines.append("Review the annotated image (red highlights) for adjustment guidance.")
 
     feedback_lines.append("\n--- COMPONENT BREAKDOWN ---")
 
     if heel_disengagement_detected:
-        feedback_lines.append(f"✅ Heel Disengagement: Moving Heel lifted before active snap (correct pivot initiation).")
+        feedback_lines.append(f"✅ Heel Disengagement: Moving Heel lifted cleanly (correct pivot initiation).")
     else:
-        feedback_lines.append(f"❌ Heel Disengagement: Moving Heel did not lift cleanly, suggesting the foot was dragged or slid.")
+        feedback_lines.append(f"❌ Heel Disengagement: You are sliding or dragging your foot. **Ensure the heel lifts first for a sharp turn.**")
 
     if snap_motion_detected:
         feedback_lines.append(f"✅ Snap Motion: Moving foot executed the required lift/snap motion (Active knee bend detected).")
     else:
-        feedback_lines.append(f"❌ Snap Motion: Moving foot was passive (no clear active lift detected).")
+        feedback_lines.append(f"❌ Snap Motion: Your moving foot was passive. **Active knee bend is required for a sharp snap.**")
 
     if final_snap_achieved:
         feedback_lines.append("✅ Final Position: Feet snapped together correctly into the Attention stance.")
     else:
-        feedback_lines.append("❌ Final Position: Failed to snap into the correct Attention stance (feet separated or legs bent).")
-    
-    
-    return {"image_b64_array": image_b64_data, "feedback": "\n".join(feedback_lines)}
+        feedback_lines.append("❌ Final Position: Your feet were not snapped together perfectly. **Ensure both legs are locked straight in the final posture.**")
+        
+    final_text_report = "\n".join(feedback_lines)
+
+    # Return dictionary with Base64 image data and text feedback
+    return {"image_b64_array": image_b64_data, "feedback": final_text_report}
 
 
 # --- EXPORT FUNCTIONS ---
