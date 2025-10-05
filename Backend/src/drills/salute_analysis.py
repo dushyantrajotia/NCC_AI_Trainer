@@ -227,7 +227,7 @@ def analyze_salute(video_path, analysis_dir):
         image_b64_data.append(f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}")
     
     # --- FINAL TEXT REPORT GENERATION ---
-    feedback_lines = [f"\n--- NCC SALUTE ANALYSIS ---"]
+    feedback_lines = [f"\n"]
     
     overall_correct = (finger_placement_succeeded and hand_form_succeeded and elbow_raise_succeeded)
     

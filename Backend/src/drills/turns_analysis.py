@@ -4,6 +4,7 @@ import sys
 import math
 import os
 import uuid
+import base64
 
 # --- IMPORT FIX ---
 try:
@@ -221,7 +222,7 @@ def analyze_turn_logic(video_path, analysis_dir, drill_name):
         image_b64_data.append(f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}")
     
     # --- FINAL TEXT REPORT GENERATION ---
-    feedback_lines = [f"\n--- NCC {drill_name.upper()} ANALYSIS ---"]
+    feedback_lines = [f"\n"]
     
     overall_correct = (heel_disengagement_detected and snap_motion_detected and final_snap_achieved)
     
@@ -246,8 +247,7 @@ def analyze_turn_logic(video_path, analysis_dir, drill_name):
         feedback_lines.append("✅ Final Position: Feet snapped together correctly into the Attention stance.")
     else:
         feedback_lines.append("❌ Final Position: Failed to snap into the correct Attention stance (feet separated or legs bent).")
-        
-    feedback_lines.append("===========================================================")
+    
     
     return {"image_b64_array": image_b64_data, "feedback": "\n".join(feedback_lines)}
 
