@@ -1,3 +1,4 @@
 # backend/.gitignore
 
 venv/
+*.pyc

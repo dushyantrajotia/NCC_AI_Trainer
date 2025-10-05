@@ -82,7 +82,7 @@ def upload_file():
         
         # 3. Compile final response (aggregating text and taking the first image)
         
-        final_text_report = f"===========================================================\nNCC MULTI-DRILL ANALYSIS START ({len(selected_drills)} checks)\n===========================================================\n"
+        final_text_report = f"JAI HIND , I AM YOUR DRILL INSTRUCTOR \nYOUR NCC DRILL ANALYSIS STARTED WITH ({len(selected_drills)} checks)\n"
         final_image_b64 = None
 
         for result in all_results:

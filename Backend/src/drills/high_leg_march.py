@@ -240,7 +240,7 @@ def analyze_high_leg_march(video_path, analysis_dir):
         image_b64_data.append(f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}")
     
     # --- FINAL TEXT REPORT GENERATION ---
-    feedback_lines = [f"\n--- NCC HIGH LEG MARCH ANALYSIS ---"]
+    feedback_lines = [f"\n"]
     
     overall_correct = (knee_height_succeeded and knee_angle_succeeded and stationary_leg_succeeded)
     

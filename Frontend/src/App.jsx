@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Download, AlertTriangle, Image, CheckCircle } from 'lucide-react'; 
+import React, { useState, useEffect, useRef } from 'react';
+import './App.css';
+import nccLogo from './assets/ncc_logo.png';
+import nccUnity from './assets/ncc_unity.png';
 
-// Define the available drill checkpoints. Must match keys in app.py's DRILL_FUNCTION_MAP.
 const DRILL_CHECKPOINTS = [
   { value: 'high_leg_march', label: 'High Leg March (Attention)' },
   { value: 'salute', label: 'NCC Salute' },
@@ -11,56 +12,130 @@ const DRILL_CHECKPOINTS = [
 
 function App() {
   const [file, setFile] = useState(null);
-  const [selectedCheckpoints, setSelectedCheckpoints] = useState([DRILL_CHECKPOINTS[0].value]);
+  const [selectedCheckpoints, setSelectedCheckpoints] = useState([]);
   const [feedback, setFeedback] = useState('Select one or more drills and upload a video.');
   const [loading, setLoading] = useState(false);
-  const [fileName, setFileName] = useState('');
-  const [imageSource, setImageSource] = useState(null); // Stores the Base64 image URL
-  const [showError, setShowError] = useState(''); 
+  const [progress, setProgress] = useState(0);
+  const [imageSource, setImageSource] = useState(null);
 
-  // Effect to clear potential error message
-  useEffect(() => {
-    if (showError) {
-      const timer = setTimeout(() => setShowError(''), 5000);
-      return () => clearTimeout(timer);
+  const playVoiceReport = (text) => {
+    if ('speechSynthesis' in window) {
+      // Remove symbols/emojis and extra non-alphanumeric characters
+      const cleanText = text.replace(/[^a-zA-Z0-9.,;!?()\s]/g, '');
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.rate = 1;   // normal speed
+      utterance.pitch = 1;  // normal pitch
+      window.speechSynthesis.speak(utterance);
     }
-  }, [showError]);
-
-  const handleFileChange = (event) => {
-    const uploadedFile = event.target.files[0];
-    setFile(uploadedFile);
-    setFileName(uploadedFile ? uploadedFile.name : '');
-    setImageSource(null); // Clear previous image source
-    setFeedback(`File selected: ${uploadedFile ? uploadedFile.name : ''}. Click Analyze Drill.`);
   };
 
-  const handleCheckpointChange = (event) => {
-    const { value, checked } = event.target;
+  const resultsRef = useRef(null);
 
-    setSelectedCheckpoints(prev => 
-      checked 
-        ? [...prev, value] // Add to array if checked
-        : prev.filter(v => v !== value) // Remove from array if unchecked
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+
+    // Ensure canvas fills the window
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resizeCanvas();
+
+    const particles = [];
+    const numParticles = 60;
+
+    class Particle {
+      constructor() {
+        this.x = Math.random() * canvas.width;
+        this.y = Math.random() * canvas.height;
+        this.size = Math.random() * 3 + 1;
+        this.speedX = Math.random() * 1 - 0.5;
+        this.speedY = Math.random() * 1 - 0.5;
+        this.color = `rgba(255, 255, 255, ${Math.random() * 0.5 + 0.3})`;
+      }
+      update() {
+        this.x += this.speedX;
+        this.y += this.speedY;
+        if (this.x > canvas.width) this.x = 0;
+        if (this.x < 0) this.x = canvas.width;
+        if (this.y > canvas.height) this.y = 0;
+        if (this.y < 0) this.y = canvas.height;
+      }
+      draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+      }
+    }
+
+    for (let i = 0; i < numParticles; i++) {
+      particles.push(new Particle());
+    }
+
+    let animationFrameId;
+
+    const animate = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      particles.forEach(p => {
+        p.update();
+        p.draw();
+      });
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animate();
+
+    window.addEventListener('resize', resizeCanvas);
+    return () => {
+      window.removeEventListener('resize', resizeCanvas);
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, []);
+
+
+  const handleFileChange = (e) => {
+    const uploadedFile = e.target.files[0];
+    setFile(uploadedFile || null);
+    setFeedback(uploadedFile ? `Selected: ${uploadedFile.name}` : 'Select one or more drills and upload a video.');
+  };
+
+  const handleCheckpointChange = (e) => {
+    const { value, checked } = e.target;
+    setSelectedCheckpoints(prev =>
+      checked ? [...prev, value] : prev.filter(v => v !== value)
     );
   };
 
-  const handleUpload = async () => {
-    if (!file) {
-      setShowError('Please select a video file first.');
-      return;
-    }
-    if (selectedCheckpoints.length === 0) {
-      setShowError('Please select at least one drill checkpoint to analyze.');
-      return;
-    }
+  const getDrillLabels = () => selectedCheckpoints.map(val => DRILL_CHECKPOINTS.find(d => d.value === val)?.label).join(', ');
+
+  const simulateProgress = () => {
+    setProgress(0);
+    const interval = setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 100) {
+          clearInterval(interval);
+          return 100;
+        }
+        return prev + Math.floor(Math.random() * 5 + 1); // increment 1-5%
+      });
+    }, 300);
+  };
+
+  const handleAnalyze = async () => {
+    if (!file) return alert('Please upload a video.');
+    if (selectedCheckpoints.length === 0) return alert('Select at least one drill.');
 
     setLoading(true);
-    setImageSource(null);
-    setFeedback('Processing video... analyzing frames and generating annotated image. This may take a moment.');
+    simulateProgress();
+    setFeedback('Analyzing video...');
 
     const formData = new FormData();
-    formData.append('video', file); 
-    formData.append('drill_types', JSON.stringify(selectedCheckpoints)); 
+    formData.append('video', file);
+    formData.append('drill_types', JSON.stringify(selectedCheckpoints));
 
     try {
       const response = await fetch('http://127.0.0.1:5000/upload_and_analyze', {
@@ -70,276 +145,116 @@ function App() {
 
       const data = await response.json();
 
-      if (response.ok && data.success) {
-        // Success: Set text report and image source
-        setFeedback(data.feedback);
-        if (data.annotated_image_b64) {
-            setImageSource(data.annotated_image_b64);
-        } else {
-            setImageSource(null);
-            setFeedback(data.feedback + "\n\n(Note: No failure or success image was produced for this analysis.)");
-        }
-      } else {
-        // Failure: Display specific error message from the backend
-        setFeedback(`Analysis Failed (HTTP ${response.status} Error): ${data.error || 'Unknown error. Check the Flask console.'}`);
-        setImageSource(null);
-      }
+      setProgress(100);
+      setTimeout(() => setLoading(false), 500); // small delay for smooth transition
 
+      if (response.ok && data.success) {
+        setFeedback(data.feedback);
+        setImageSource(data.annotated_image_b64 || null);
+        resultsRef.current.scrollIntoView({ behavior: 'smooth' });
+        playVoiceReport(data.feedback)
+      } else {
+        setFeedback(`Analysis Failed: ${data.error || 'Unknown error.'}`);
+        setImageSource(null);
+        resultsRef.current.scrollIntoView({ behavior: 'smooth' });
+      }
     } catch (error) {
-      setFeedback(`Network Error: Could not connect to the backend server. Is Flask running on port 5000? Error: ${error.message}`);
+      setFeedback(`Network Error: ${error.message}`);
       setImageSource(null);
-    } finally {
       setLoading(false);
+      resultsRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   };
 
-  const getDrillLabels = () => selectedCheckpoints.map(value => DRILL_CHECKPOINTS.find(d => d.value === value)?.label).join(', ');
-
   return (
-    <div style={styles.container}>
-      <h1 style={styles.header}>NCC Drill Procedure Analyzer</h1>
-      
-      {showError && (
-        <div style={styles.errorBox}>
-          <AlertTriangle size={20} style={{marginRight: '8px'}} />
-          {showError}
+    <div className="app-container">
+      {/* Background Canvas */}
+      <canvas id="bg-canvas"ref={canvasRef} style={{position: 'fixed',top: 0,left: 0,width: '100%',height: '100%',zIndex: -1}}></canvas>
+
+      {/* Header */}
+      <header className="app-header">
+        <div className="header-left">
+          <img src={nccLogo} alt="NCC Logo" className="logo" />
+          <span className="ncc-text">
+            <span className="ncc-red">NCC </span>
+            <span className="ncc-sky">CADET </span>
+            <span className="ncc-blue">CORPS</span>
+          </span>
+        </div>
+        <h1 className="header-title">NCC DRILL ANALYZER</h1>
+        <div className="header-right">
+          <img src={nccUnity} alt="NCC Unity" className="logo" />
+        </div>
+      </header>
+      <div className="header-line"></div>
+
+      <br></br>
+
+      {/* Analyze Section */}
+      <div className="analyze-section">
+        <input type="file" accept="video/mp4,video/avi" onChange={handleFileChange} />
+        <button onClick={handleAnalyze} disabled={loading || !file || selectedCheckpoints.length === 0}>Analyze</button>
+      </div>
+
+      <br></br>
+
+      <h2 className="centered">Choose command to be analyzed : </h2>
+
+      <div className="checkbox-grid">
+        {DRILL_CHECKPOINTS.map(d => (
+          <label key={d.value} className="checkbox-label">
+            <input type="checkbox" value={d.value} onChange={handleCheckpointChange} disabled={loading} />
+            {d.label}
+          </label>
+        ))}
+      </div>
+
+      {/* Loading Overlay */}
+      {loading && (
+        <div className="loading-overlay">
+          <div className="loading-box">
+            <p>Analyzing: {Math.min(progress, 100)}%</p>
+            <div className="progress-bar">
+              <div className="progress-fill" style={{ width: `${Math.min(progress, 100)}%` }}></div>
+            </div>
+          </div>
         </div>
       )}
 
-      <div style={styles.controlGroup}>
-        <label style={styles.label}>Select Checkpoints:</label>
-        <div style={styles.checkboxContainer}>
-          {DRILL_CHECKPOINTS.map((drill) => (
-            <label key={drill.value} style={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                value={drill.value}
-                checked={selectedCheckpoints.includes(drill.value)}
-                onChange={handleCheckpointChange}
-                disabled={loading}
-                style={styles.checkboxInput}
-              />
-              {drill.label}
-            </label>
-          ))}
+      {/* Results */}
+      <div ref={resultsRef} className="results-section">
+        <div className="visual-feedback">
+          <h2 className="centered">Visual Feedback:</h2>
+          {imageSource ? <img src={imageSource} alt="Annotated Drill" /> : <p>No image generated.</p>}
+        </div>
+        <div className="analysis-report">
+          <h2 className="centered">Analysis Report:</h2>
+          <pre>{feedback}</pre>
+          {feedback && (
+            <button
+              onClick={() => playVoiceReport(feedback)}
+              style={{
+                marginTop: '15px',
+                padding: '10px 20px',
+                backgroundColor: '#0D47A1',
+                color: 'white',
+                fontWeight: 'bold',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
+            >
+              🔊 Play Voice Report
+            </button>
+          )}
         </div>
       </div>
 
-      <div style={styles.uploadSection}>
-        <label style={styles.label}>Upload Video (MP4/AVI):</label>
-        <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
-            <input 
-              type="file" 
-              accept="video/mp4,video/avi" 
-              onChange={handleFileChange} 
-              disabled={loading}
-              style={styles.fileInput}
-            />
-        </div>
-        {fileName && <p style={styles.fileNameText}>Selected: {fileName} | Analyzing: {getDrillLabels()}</p>}
-      </div>
-
-      <button 
-        onClick={handleUpload} 
-        disabled={!file || loading || selectedCheckpoints.length === 0}
-        style={styles.button(loading)}
-      >
-        {loading ? 'Analyzing...' : 'Analyze Drill'}
-      </button>
-
-      <div style={styles.reportLayout}>
-        {/* --- Visual Feedback (Image Display) --- */}
-        <div style={styles.imageColumn}>
-            <h2 style={styles.feedbackHeader}>Visual Feedback</h2>
-            <div style={styles.imageBox}>
-                {loading && <div style={styles.placeholder}><Image size={48} color="#ccc" /><p style={{color: '#999'}}>Generating Annotated Image...</p></div>}
-                
-                {/* 🚨 RENDER IMAGE HERE 🚨 */}
-                {!loading && imageSource && (
-                    <img src={imageSource} alt="Annotated Drill Posture" style={styles.imagePlayer} />
-                )}
-                
-                {!loading && !imageSource && <div style={styles.placeholder}><Image size={48} color="#ccc" /><p style={{color: '#999'}}>Upload video to begin analysis.</p></div>}
-            </div>
-            
-        </div>
-
-        {/* --- Text Feedback Report --- */}
-        <div style={styles.reportColumn}>
-            <h2 style={styles.feedbackHeader}>Analysis Report</h2>
-            <pre style={styles.feedbackBox}>
-              {feedback}
-            </pre>
-        </div>
-      </div>
+      <br></br>
+      <br></br>
+      <footer className="app-footer centered">© 2025 NCC - CTUNIVERSITY. All Rights Reserved.</footer>
     </div>
   );
 }
-
-const styles = {
-  container: {
-    maxWidth: '1000px',
-    margin: '40px auto',
-    padding: '25px',
-    fontFamily: 'Inter, sans-serif',
-    borderRadius: '16px',
-    boxShadow: '0 12px 24px rgba(0, 0, 0, 0.2)',
-    backgroundColor: '#F7F9FC',
-    textAlign: 'center',
-  },
-  header: {
-    color: '#1565C0', 
-    marginBottom: '15px',
-    borderBottom: '3px solid #E0E0E0',
-    paddingBottom: '10px',
-  },
-  errorBox: {
-    backgroundColor: '#FFCDD2',
-    color: '#C62828',
-    padding: '12px',
-    borderRadius: '8px',
-    marginBottom: '20px',
-    fontWeight: 'bold',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  controlGroup: {
-    marginBottom: '20px',
-  },
-  label: {
-    fontWeight: 'bold',
-    marginBottom: '8px',
-    color: '#333',
-    alignSelf: 'flex-start',
-    width: '100%',
-    textAlign: 'left',
-  },
-  checkboxContainer: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '20px',
-    padding: '15px',
-    border: '1px solid #B0BEC5',
-    borderRadius: '10px',
-    backgroundColor: '#E3F2FD',
-    width: '100%',
-    justifyContent: 'space-between',
-    boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.1)',
-  },
-  checkboxLabel: {
-    display: 'flex',
-    alignItems: 'center',
-    cursor: 'pointer',
-    fontSize: '15px',
-    color: '#1F2937',
-    flexBasis: '48%', 
-    textAlign: 'left',
-  },
-  checkboxInput: {
-    marginRight: '8px',
-    minWidth: '18px',
-    minHeight: '18px',
-    accentColor: '#1565C0',
-  },
-  uploadSection: {
-    marginBottom: '25px',
-    textAlign: 'left',
-  },
-  fileInput: {
-    padding: '10px 0',
-    border: 'none',
-    backgroundColor: 'transparent',
-    fontSize: '15px',
-  },
-  fileNameText: {
-    marginTop: '10px',
-    color: '#00796B',
-    fontSize: '14px',
-    paddingTop: '5px',
-    borderTop: '1px dotted #B0BEC5',
-  },
-  button: (loading) => ({
-    padding: '14px 30px',
-    backgroundColor: loading ? '#64B5F6' : '#1565C0',
-    color: 'white',
-    border: 'none',
-    borderRadius: '10px',
-    fontSize: '18px',
-    fontWeight: 'bold',
-    cursor: loading ? 'not-allowed' : 'pointer',
-    transition: 'background-color 0.3s ease, box-shadow 0.3s ease',
-    width: '100%',
-    boxShadow: '0 4px 10px rgba(0, 0, 0, 0.2)',
-    opacity: loading ? 0.9 : 1,
-  }),
-  reportLayout: {
-    marginTop: '30px',
-    display: 'flex',
-    gap: '25px',
-    textAlign: 'left',
-    '@media (max-width: 768px)': {
-        flexDirection: 'column',
-    },
-  },
-  imageColumn: {
-    flex: 1,
-    minWidth: '400px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    '@media (max-width: 768px)': {
-        minWidth: 'auto',
-        width: '100%',
-    },
-  },
-  reportColumn: {
-    flex: 1,
-    minWidth: '400px',
-    '@media (max-width: 768px)': {
-        minWidth: 'auto',
-        width: '100%',
-    },
-  },
-  feedbackHeader: {
-    color: '#1565C0',
-    marginBottom: '15px',
-    fontSize: '20px',
-    textAlign: 'center',
-  },
-  imageBox: { 
-    width: '100%',
-    aspectRatio: '4/3', 
-    backgroundColor: '#E0E0E0',
-    borderRadius: '10px',
-    overflow: 'hidden',
-    boxShadow: '0 2px 5px rgba(0,0,0,0.1)',
-    display: 'flex',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  imagePlayer: { 
-    width: '100%',
-    height: '100%',
-    objectFit: 'contain',
-  },
-  placeholder: {
-    textAlign: 'center',
-    padding: '40px',
-  },
-  feedbackBox: {
-    backgroundColor: '#FFFFFF',
-    border: '1px solid #B0BEC5',
-    borderRadius: '10px',
-    padding: '15px',
-    whiteSpace: 'pre-wrap', 
-    wordWrap: 'break-word',
-    minHeight: '300px',
-    fontSize: '14px',
-    color: '#1F2937',
-    overflowX: 'auto',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-  },
-};
 
 export default App;
