@@ -5,68 +5,63 @@ import math
 import os
 import uuid
 import base64
+import numpy as np
 
 # --- IMPORT FIX ---
-# CRITICAL FIX: Simplify to standard relative import for package use.
 try:
-    from .src.pose_utils import calculate_angle 
+    from .pose_utils import calculate_angle 
 except ImportError:
-    # Fallback/testing logic remains minimal
     try:
         from src.pose_utils import calculate_angle 
     except ImportError:
-        print("FATAL ERROR: Could not import calculate_angle from pose_utils.py. Ensure pose_utils.py is in the 'src/drills' directory.")
+        print("FATAL ERROR: Could not import calculate_angle from pose_utils.py.")
         sys.exit(1)
 
-# Initialize MediaPipe Pose Drawing Utilities and Model
+# Initialize MediaPipe components
 mp_drawing = mp.solutions.drawing_utils
 mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+pose = None # 🚨 CRITICAL FIX: Lazy Initialization Placeholder
 
 # --- DEFINED CONSTANTS (Tolerances for Drill Accuracy) ---
-# FINGER PLACEMENT (Index finger touching the temple/eyebrow)
 FINGER_Y_ALIGNMENT_TOLERANCE = 0.04 
 FINGER_X_ALIGNMENT_TOLERANCE = 0.06 
-
-# HAND FORM AND ARM RIGIDITY
 WRIST_RIGIDITY_MIN_ANGLE = 160 
 ELBOW_RAISE_ANGLE_RANGE = (160, 180) 
 
+# --- LAZY INITIALIZATION HELPER FUNCTION ---
+def _get_pose_model():
+    """Initializes the heavy MediaPipe Pose model only if it hasn't been done yet."""
+    global pose
+    if pose is None:
+        print("INFO: Lazily initializing MediaPipe Pose model for Salute analysis...")
+        pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    return pose
+
 # --- DRAWING UTILITY FUNCTION (Shared) ---
 def draw_and_annotate(image, landmarks, fail_points, drill_name):
+    """Draws landmarks and highlights failure points."""
     h, w, _ = image.shape
     
-    # Draw all standard MediaPipe connections (green)
     mp_drawing.draw_landmarks(
-        image, 
-        landmarks, 
-        mp_pose.POSE_CONNECTIONS,
+        image, landmarks, mp_pose.POSE_CONNECTIONS,
         mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
         mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2)
     )
 
-    # Convert image to BGR for OpenCV drawing 
     annotated_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    
     fail_message = ""
-    RED = (0, 0, 255) # BGR format
-    GREEN = (0, 255, 0) # BGR format
+    RED = (0, 0, 255) 
+    GREEN = (0, 255, 0) 
 
-    # Highlight specific fail points
+    # Highlight specific fail points 
     if 'FINGER_POS' in fail_points:
         R_INDEX = mp_pose.PoseLandmark.RIGHT_INDEX.value
         R_EYE_OUTER = mp_pose.PoseLandmark.RIGHT_EYE_OUTER.value
         R_EAR = mp_pose.PoseLandmark.RIGHT_EAR.value
         
-        # 1. Highlight the incorrect index finger position in RED
-        cv2.circle(annotated_image, 
-                   (int(landmarks.landmark[R_INDEX].x * w), int(landmarks.landmark[R_INDEX].y * h)), 
-                   10, RED, -1)
-        
-        # 2. Draw a GREEN circle at the ideal target zone
+        cv2.circle(annotated_image, (int(landmarks.landmark[R_INDEX].x * w), int(landmarks.landmark[R_INDEX].y * h)), 10, RED, -1)
         target_x = int(((landmarks.landmark[R_EYE_OUTER].x + landmarks.landmark[R_EAR].x) / 2) * w)
-        target_y = int(landmarks.landmark[R_EYE_OUTER].y * h) # Use outer eye as vertical target proxy
-        
+        target_y = int(landmarks.landmark[R_EYE_OUTER].y * h)
         cv2.circle(annotated_image, (target_x, target_y), 10, GREEN, -1)
         fail_message += "Placement Fail "
         
@@ -75,196 +70,155 @@ def draw_and_annotate(image, landmarks, fail_points, drill_name):
         R_INDEX = mp_pose.PoseLandmark.RIGHT_INDEX.value
         R_ELBOW = mp_pose.PoseLandmark.RIGHT_ELBOW.value
         
-        # Highlight wrist, elbow, index finger segment in RED
-        cv2.line(annotated_image, 
-                 (int(landmarks.landmark[R_ELBOW].x * w), int(landmarks.landmark[R_ELBOW].y * h)), 
-                 (int(landmarks.landmark[R_WRIST].x * w), int(landmarks.landmark[R_WRIST].y * h)), 
-                 RED, 5) 
-        cv2.line(annotated_image, 
-                 (int(landmarks.landmark[R_WRIST].x * w), int(landmarks.landmark[R_WRIST].y * h)), 
-                 (int(landmarks.landmark[R_INDEX].x * w), int(landmarks.landmark[R_INDEX].y * h)), 
-                 RED, 5) 
+        cv2.line(annotated_image, (int(landmarks.landmark[R_ELBOW].x * w), int(landmarks.landmark[R_ELBOW].y * h)), 
+                 (int(landmarks.landmark[R_WRIST].x * w), int(landmarks.landmark[R_WRIST].y * h)), RED, 5) 
+        cv2.line(annotated_image, (int(landmarks.landmark[R_WRIST].x * w), int(landmarks.landmark[R_WRIST].y * h)), 
+                 (int(landmarks.landmark[R_INDEX].x * w), int(landmarks.landmark[R_INDEX].y * h)), RED, 5) 
         fail_message += "Hand Rigidity Fail "
 
     if 'ELBOW_RAISE' in fail_points:
         R_SHOULDER = mp_pose.PoseLandmark.RIGHT_SHOULDER.value
         R_ELBOW = mp_pose.PoseLandmark.RIGHT_ELBOW.value
         
-        # Highlight Shoulder-Elbow segment in RED
-        cv2.line(annotated_image, 
-                 (int(landmarks.landmark[R_SHOULDER].x * w), int(landmarks.landmark[R_SHOULDER].y * h)), 
-                 (int(landmarks.landmark[R_ELBOW].x * w), int(landmarks.landmark[R_ELBOW].y * h)), 
-                 RED, 5) 
+        cv2.line(annotated_image, (int(landmarks.landmark[R_SHOULDER].x * w), int(landmarks.landmark[R_SHOULDER].y * h)), 
+                 (int(landmarks.landmark[R_ELBOW].x * w), int(landmarks.landmark[R_ELBOW].y * h)), RED, 5) 
         fail_message += "Elbow Angle Fail"
         
-    # Put text report on top of the video
     cv2.putText(annotated_image, f"{drill_name}: {fail_message}", (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
     
     return annotated_image
 
+# --- CORE LOGIC: ABSTRACTED POSTURE CHECK ---
+def _get_salute_posture_feedback(landmarks, mp_pose):
+    """Calculates posture compliance for a single frame."""
+    lm = landmarks.landmark
+    
+    right_ear = (lm[mp_pose.PoseLandmark.RIGHT_EAR].x, lm[mp_pose.PoseLandmark.RIGHT_EAR].y)
+    right_eye_outer = (lm[mp_pose.PoseLandmark.RIGHT_EYE_OUTER].x, lm[mp_pose.PoseLandmark.RIGHT_EYE_OUTER].y)
+    r_shoulder = (lm[mp_pose.PoseLandmark.RIGHT_SHOULDER].x, lm[mp_pose.PoseLandmark.RIGHT_SHOULDER].y)
+    r_elbow = (lm[mp_pose.PoseLandmark.RIGHT_ELBOW].x, lm[mp_pose.PoseLandmark.RIGHT_ELBOW].y)
+    r_wrist = (lm[mp_pose.PoseLandmark.RIGHT_WRIST].x, lm[mp_pose.PoseLandmark.RIGHT_WRIST].y)
+    r_index = (lm[mp_pose.PoseLandmark.RIGHT_INDEX].x, lm[mp_pose.PoseLandmark.RIGHT_INDEX].y)
 
-# --- CORE ANALYSIS FUNCTION ---
+    fail_points = []
+    
+    # 1. FINGER PLACEMENT CHECK
+    target_y = right_eye_outer[1]
+    target_x = (right_eye_outer[0] + right_ear[0]) / 2
+    
+    y_pos_deviation = abs(r_index[1] - target_y)
+    x_pos_deviation = abs(r_index[0] - target_x)
+    
+    finger_placement_ok = (y_pos_deviation < FINGER_Y_ALIGNMENT_TOLERANCE and 
+                           x_pos_deviation < FINGER_X_ALIGNMENT_TOLERANCE)
+    if not finger_placement_ok: fail_points.append('FINGER_POS')
+
+    # 2. HAND FORM CHECK (Wrist rigidity/straightness)
+    wrist_rigidity_angle = calculate_angle(r_elbow, r_wrist, r_index)
+    hand_form_ok = wrist_rigidity_angle >= WRIST_RIGIDITY_MIN_ANGLE
+    if not hand_form_ok: fail_points.append('HAND_FORM')
+
+    # 3. ARM RAISE/RIGIDITY CHECK (Elbow Angle)
+    elbow_angle = calculate_angle(r_shoulder, r_elbow, r_wrist)
+    elbow_raise_ok = (ELBOW_RAISE_ANGLE_RANGE[0] <= elbow_angle <= ELBOW_RAISE_ANGLE_RANGE[1])
+    if not elbow_raise_ok: fail_points.append('ELBOW_RAISE')
+    
+    success_flags = {
+        'finger_placement': finger_placement_ok,
+        'hand_form': hand_form_ok,
+        'elbow_raise': elbow_raise_ok,
+    }
+    
+    return success_flags, fail_points
+
+def analyze_salute_frame(frame_rgb, analysis_dir):
+    """Analyzes a single RGB frame from the webcam (Live Mode)."""
+    model = _get_pose_model() 
+    results = model.process(frame_rgb)
+    
+    if results.pose_landmarks:
+        success_flags, fail_points = _get_salute_posture_feedback(results.pose_landmarks, mp_pose)
+        
+        annotated_image = draw_and_annotate(frame_rgb.copy(), results.pose_landmarks, fail_points, "SALUTE (LIVE)")
+        
+        _, buffer = cv2.imencode('.jpg', annotated_image)
+        image_b64_data = [f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"]
+
+        if not fail_points:
+            feedback_text = "🌟 **Perfect Salute!** Hold the position with rigidity."
+        else:
+            feedback_text = f"❌ **Error!** Fix highlighted areas: {', '.join(fail_points).replace('_', ' ')}. Maintain arm and wrist lock."
+        
+        return {"image_b64_array": image_b64_data, "feedback": feedback_text}
+        
+    return {"image_b64_array": [], "feedback": "No cadet detected in the frame or hand is not raised."}
+
+
+# --------------------------------------------------------------------------
+# --- EXPORT 2: VIDEO ANALYSIS (Comprehensive) ---
+# --------------------------------------------------------------------------
 def analyze_salute(video_path, analysis_dir):
+    """Analyzes a full video for cumulative performance (Video Upload Mode)."""
+    model = _get_pose_model() 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return {"error": "Video file not found or corrupted.", "feedback": "Error: Video file not found or corrupted."}
 
-    # --- TRACKING FLAGS ---
     finger_placement_succeeded = False
     hand_form_succeeded = False
     elbow_raise_succeeded = False
 
-    # --- FRAME CAPTURE STORAGE ---
-    best_failure_frame = None
-    best_success_frame = None
-    min_failures = float('inf')
+    best_failure_frame_image = None
     last_known_landmarks = None
 
     try:
         while cap.isOpened():
             ret, frame = cap.read()
-            if not ret:
-                break
+            if not ret: break
 
             image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(image)
+            results = model.process(image)
             
-            current_frame_fail_points = []
-
             if results.pose_landmarks:
-                lm = results.pose_landmarks.landmark
                 last_known_landmarks = results.pose_landmarks
+                success_flags, current_frame_fail_points = _get_salute_posture_feedback(results.pose_landmarks, mp_pose)
                 
-                # --- Landmark Extraction ---
-                right_ear = (lm[mp_pose.PoseLandmark.RIGHT_EAR].x, lm[mp_pose.PoseLandmark.RIGHT_EAR].y)
-                right_eye_inner = (lm[mp_pose.PoseLandmark.RIGHT_EYE_INNER].x, lm[mp_pose.PoseLandmark.RIGHT_EYE_INNER].y)
-                right_eye_outer = (lm[mp_pose.PoseLandmark.RIGHT_EYE_OUTER].x, lm[mp_pose.PoseLandmark.RIGHT_EYE_OUTER].y)
+                if success_flags:
+                    if success_flags['finger_placement']: finger_placement_succeeded = True
+                    if success_flags['hand_form']: hand_form_succeeded = True
+                    if success_flags['elbow_raise']: elbow_raise_succeeded = True
                 
-                r_shoulder = (lm[mp_pose.PoseLandmark.RIGHT_SHOULDER].x, lm[mp_pose.PoseLandmark.RIGHT_SHOULDER].y)
-                r_elbow = (lm[mp_pose.PoseLandmark.RIGHT_ELBOW].x, lm[mp_pose.PoseLandmark.RIGHT_ELBOW].y)
-                r_wrist = (lm[mp_pose.PoseLandmark.RIGHT_WRIST].x, lm[mp_pose.PoseLandmark.RIGHT_WRIST].y)
-                r_index = (lm[mp_pose.PoseLandmark.RIGHT_INDEX].x, lm[mp_pose.PoseLandmark.RIGHT_INDEX].y)
-
-                # --- 1. FINGER PLACEMENT CHECK ---
-                target_y = (right_eye_inner[1] + right_eye_outer[1]) / 2 
-                target_x = (right_eye_outer[0] + right_ear[0]) / 2       
-                
-                y_pos_deviation = abs(r_index[1] - target_y)
-                x_pos_deviation = abs(r_index[0] - target_x)
-                
-                finger_placement_ok = (
-                    y_pos_deviation < FINGER_Y_ALIGNMENT_TOLERANCE and 
-                    x_pos_deviation < FINGER_X_ALIGNMENT_TOLERANCE
-                )
-
-                # --- 2. HAND FORM CHECK (Elbow-Wrist-Index straightness) ---
-                wrist_rigidity_angle = calculate_angle(r_elbow, r_wrist, r_index)
-                hand_form_ok = wrist_rigidity_angle >= WRIST_RIGIDITY_MIN_ANGLE
-
-                # --- 3. ARM RAISE/RIGIDITY CHECK (Elbow Angle) ---
-                elbow_angle = calculate_angle(r_shoulder, r_elbow, r_wrist)
-                elbow_raise_ok = (
-                    ELBOW_RAISE_ANGLE_RANGE[0] <= elbow_angle <= ELBOW_RAISE_ANGLE_RANGE[1]
-                )
-                
-                # --- UPDATE SUCCESS TRACKERS ---
-                if finger_placement_ok:
-                    finger_placement_succeeded = True
-                if hand_form_ok:
-                    hand_form_succeeded = True
-                if elbow_raise_ok:
-                    elbow_raise_succeeded = True
-
-                # --- VISUAL FRAME CAPTURE LOGIC ---
-                
-                if not finger_placement_ok: current_frame_fail_points.append('FINGER_POS')
-                if not hand_form_ok: current_frame_fail_points.append('HAND_FORM')
-                if not elbow_raise_ok: current_frame_fail_points.append('ELBOW_RAISE')
-                
-                num_failures = len(current_frame_fail_points)
-                
-                if num_failures == 0:
-                    best_success_frame = image.copy()
-                    
-                if num_failures > 0 and (best_failure_frame is None or num_failures > min_failures):
-                    min_failures = num_failures
-                    best_failure_frame = image.copy()
+                    if current_frame_fail_points and best_failure_frame_image is None:
+                        best_failure_frame_image = image.copy()
             
-            # Note: We are no longer writing video frames here
-
-    except Exception as e:
-        error_message = f"Critical error during video processing: {str(e)}"
-        final_text_report = f"\n--- ERROR ---\n{error_message}\n--- ERROR ---"
-        return {"image_b64_array": [], "feedback": final_text_report}
-        
     finally:
         cap.release()
 
-    # --- IMAGE COMPILATION AND ENCODING ---
-    image_b64_data = []
-
-    # Choose the most relevant frame to display
-    frame_to_use = None
-    overall_correct = (finger_placement_succeeded and hand_form_succeeded and elbow_raise_succeeded)
+    final_fail_points = []
+    if not finger_placement_succeeded: final_fail_points.append('FINGER_POS')
+    if not hand_form_succeeded: final_fail_points.append('HAND_FORM')
+    if not elbow_raise_succeeded: final_fail_points.append('ELBOW_RAISE')
     
-    if overall_correct:
-        frame_to_use = best_success_frame
-        final_fail_points = [] 
-    else:
-        frame_to_use = best_failure_frame 
-        final_fail_points = []
-        if not finger_placement_succeeded: final_fail_points.append('FINGER_POS')
-        if not hand_form_succeeded: final_fail_points.append('HAND_FORM')
-        if not elbow_raise_succeeded: final_fail_points.append('ELBOW_RAISE')
-
-
-    if frame_to_use is not None and last_known_landmarks is not None:
-        # Annotate the single saved frame
-        annotated_image = draw_and_annotate(frame_to_use, last_known_landmarks, final_fail_points, "SALUTE")
-        
-        # Encode image to Base64
-        _, buffer = cv2.imencode('.jpg', annotated_image)
-        image_b64_data.append(f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}")
+    overall_correct = not final_fail_points
     
-    # --- FINAL TEXT REPORT GENERATION (COACHING STYLE) ---
     feedback_lines = []
-    
     if overall_correct:
-        feedback_lines.append(f"🌟 **Outstanding Salute!** Your posture is precise, rigid, and meets all required standards.")
-        feedback_lines.append("✅ OVERALL: PERFECT SALUTE POSTURE DETECTED.")
+         feedback_lines.append("🌟 **Outstanding Salute!** Your salute was performed correctly during the video.")
     else:
-        # --- DYNAMIC COACHING MESSAGE ---
-        failure_messages = []
-        
-        if not finger_placement_succeeded:
-            failure_messages.append("Finger Placement (index finger position).")
-        if not hand_form_succeeded:
-            failure_messages.append("Hand Form (wrist rigidity/straightness).")
-        if not elbow_raise_succeeded:
-            failure_messages.append("Arm Rigidity (elbow angle/straightness).")
-
-        feedback_lines.append(f"❌ **Action Required!** Your Salute needs immediate correction.")
-        feedback_lines.append(f"The primary areas needing attention are: **{', '.join(failure_messages)}**.")
-        feedback_lines.append("Review the annotated image (red highlights) for adjustment guidance.")
-
-    feedback_lines.append("\n--- COMPONENT BREAKDOWN ---")
-
-    if finger_placement_succeeded:
-        feedback_lines.append("✅ Finger Placement: Index finger successfully touched the required area (temple/eyebrow).")
-    else:
-        feedback_lines.append("❌ Finger Placement: Index finger was consistently off target. **Aim for the green target spot!**")
-
-    if hand_form_succeeded:
-        feedback_lines.append(f"✅ Hand Form: Hand segment was rigid (angle at wrist > {WRIST_RIGIDITY_MIN_ANGLE}°), inferring joined fingers.")
-    else:
-        feedback_lines.append(f"❌ Hand Form: Your hand segment was not rigid. **Keep your wrist locked and fingers straight and joined.**")
-
-    if elbow_raise_succeeded:
-        feedback_lines.append("✅ Arm Rigidity: Elbow angle was straight and rigid (within the 160°-180° range).")
-    else:
-        feedback_lines.append("❌ Arm Rigidity: Your elbow was too bent. **Ensure the upper arm and forearm form a near-straight, rigid line.**")
-        
+         feedback_lines.append(f"❌ **Action Required!** Areas: {', '.join(final_fail_points).replace('_', ' ')}.")
+         feedback_lines.append(f"✅ Placement: {'OK' if finger_placement_succeeded else 'FAIL'}")
+         feedback_lines.append(f"✅ Hand Form: {'OK' if hand_form_succeeded else 'FAIL'}")
+         feedback_lines.append(f"✅ Arm Rigidity: {'OK' if elbow_raise_succeeded else 'FAIL'}")
+         
     final_text_report = "\n".join(feedback_lines)
+    
+    image_b64_data = []
+    if last_known_landmarks:
+        image_for_visual = best_failure_frame_image.copy() if best_failure_frame_image is not None else image.copy()
+        visual_image = draw_and_annotate(image_for_visual, last_known_landmarks, final_fail_points, "SALUTE (VIDEO)")
+        
+        _, buffer = cv2.imencode('.jpg', visual_image)
+        image_b64_data = [f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"]
 
-    # Return dictionary with Base64 image data and text feedback
+
     return {"image_b64_array": image_b64_data, "feedback": final_text_report}
