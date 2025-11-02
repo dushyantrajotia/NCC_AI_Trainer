@@ -21,15 +21,17 @@ function App() {
   const [voiceLoading, setVoiceLoading] = useState(false);
   
   // --- LIVE MODE STATE ---
-  const [isLiveMode, setIsLiveMode] = useState(false);
+  const [isLiveMode, setIsLiveMode] = useState(false); // Is the live *interface* active?
+  const [isRecording, setIsRecording] = useState(false); // Is it *currently* recording?
   const [cameraError, setCameraError] = useState(null);
   const [availableDevices, setAvailableDevices] = useState([]); // Stores enumerated devices
   
   // --- REFS ---
   const videoRef = useRef(null); 
   const streamRef = useRef(null); // Ref for MediaStream
+  const mediaRecorderRef = useRef(null); // 🚨 NEW: Ref for MediaRecorder instance
+  const recordedChunksRef = useRef([]); // 🚨 NEW: Ref to store recorded video data
   const resultsRef = useRef(null); 
-  // removed canvasRef as particle animation is removed
 
   // --- 🚀 AMAZON POLLY TTS FUNCTION (Calling Flask Backend) 🚀 ---
   const playVoiceReport = async (text) => {
@@ -146,31 +148,25 @@ function App() {
     let stream = null;
     let successfulDeviceId = null;
     let lastError = null;
-    const MAX_ATTEMPTS = 3;
     
-    // 2. Loop through candidate device IDs until a stream works, with retries
+    // 2. Loop through candidate device IDs until a stream works
     for (const deviceId of deviceIds) {
-        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            setFeedback(`Attempting connection (Device ${deviceId.slice(0, 4)}... - Try ${attempt}/${MAX_ATTEMPTS})...`);
-            try {
-                // Use simplest constraints first
-                const constraints = { 
-                    video: { 
-                        deviceId: { exact: deviceId }
-                    }, 
-                    audio: false 
-                };
-                
-                stream = await navigator.mediaDevices.getUserMedia(constraints); 
-                successfulDeviceId = deviceId;
-                break; // Success! Break out of inner attempt loop.
-            } catch (err) {
-                lastError = err.name;
-                console.warn(`Attempt ${attempt} failed for device ID ${deviceId}: ${err.name}`);
-                await delay(attempt * 500); // Wait longer on subsequent failures
-            }
+        setFeedback(`Attempting connection to device ${deviceId.slice(0, 4)}...`);
+        try {
+            const constraints = { 
+                video: { 
+                    deviceId: { exact: deviceId }
+                }, 
+                audio: false 
+            };
+            
+            stream = await navigator.mediaDevices.getUserMedia(constraints); 
+            successfulDeviceId = deviceId;
+            break; // Success! Break out of loop.
+        } catch (err) {
+            lastError = err.name;
+            console.warn(`Attempt failed for device ID ${deviceId}: ${err.name}`);
         }
-        if (stream) break; // Success! Break out of outer device loop.
     }
 
     if (!stream) {
@@ -190,16 +186,7 @@ function App() {
         // 4. Wait for the video element to confirm stream load AND playability
         await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
-                if (video.readyState < 3 && video.srcObject) {
-                    console.warn("Stream timed out. Attempting quick reload...");
-                    video.load(); 
-                    setTimeout(() => {
-                        video.oncanplay = resolve; 
-                        video.onerror = (e) => reject(new Error("Video reload failed."));
-                    }, 1000); // Give reload 1 sec
-                } else {
-                    reject(new Error("Video stream load timeout/failure."));
-                }
+                reject(new Error("Video stream load timeout/failure."));
             }, 8000); // 8-second timeout
 
             video.oncanplay = () => {
@@ -229,7 +216,7 @@ function App() {
       }
       
       setCameraError(null);
-      setFeedback("Live drill instructor activated. Strike a pose and click 'Capture & Analyze Frame'.");
+      setFeedback("Camera feed active. Click 'Start Recording' when ready.");
 
     } catch (err) {
       console.error("Error setting up video playback:", err);
@@ -242,6 +229,12 @@ function App() {
 
   // 4. Stop the live stream
   const stopLiveStream = () => {
+    // Stop recording if it's in progress
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+    }
+    
+    // Stop camera stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
@@ -251,6 +244,7 @@ function App() {
         videoRef.current.load();
     }
     setIsLiveMode(false);
+    setIsRecording(false);
     setFeedback("Live stream stopped. Select a mode to continue.");
     setImageSource(null); 
     setCameraError(null);
@@ -261,120 +255,91 @@ function App() {
     requestMediaPermissions(); 
     return () => stopLiveStream(); // Cleanup on unmount
   }, []);
-
-  // --- LIVE FRAME ANALYZER ---
-  const handleLiveAnalyze = async () => {
-    if (!isLiveMode || selectedCheckpoints.length === 0) return alert('Start live stream and select a drill.');
-    if (loading) return;
-    
-    setLoading(true);
-    setProgress(1); 
-    setFeedback('Capturing and analyzing live frame...');
-
-    const videoElement = videoRef.current;
-    
-    // Check videoElement.readyState (3 = enough data for playback)
-    if (!videoElement || videoElement.readyState < 3) { 
-        setLoading(false);
-        setFeedback('Webcam stream is not ready. ReadyState: ' + (videoElement ? videoElement.readyState : 'N/A'));
+  
+  // --- 🚨 NEW: MEDIA RECORDER FUNCTIONS ---
+  
+  const handleStartRecording = () => {
+    if (!streamRef.current) {
+        alert("Camera stream is not active. Click 'Start Live Drill' first.");
         return;
     }
-    
-    const canvas = document.createElement('canvas');
-    canvas.width = videoElement.videoWidth || 640; 
-    canvas.height = videoElement.videoHeight || 480; 
-    const ctx = canvas.getContext('2d');
+    if (selectedCheckpoints.length === 0) {
+        alert("Please select at least one drill to analyze before recording.");
+        return;
+    }
+
+    recordedChunksRef.current = []; // Clear previous recording chunks
     
     try {
-        // Draw image from video to canvas
-        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-    } catch (e) {
-        console.error("CORS Error on drawImage:", e);
-        setLoading(false);
-        setFeedback("Error: Cannot capture frame. This can be caused by a cross-origin (CORS) issue with virtual cameras. Try using a standard USB webcam if possible.");
-        return;
-    }
+        mediaRecorderRef.current = new MediaRecorder(streamRef.current, {
+            mimeType: 'video/webm' // Use webm, good balance of quality/compatibility
+        });
 
+        // Store data chunks as they become available
+        mediaRecorderRef.current.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                recordedChunksRef.current.push(event.data);
+            }
+        };
 
-    canvas.toBlob(async (blob) => {
-        if (!blob) {
-            setLoading(false);
-            setFeedback('Failed to capture frame from video stream.');
-            return;
-        }
-
-        const formData = new FormData();
-        formData.append('frame', blob, 'live_frame.jpg');
-        formData.append('drill_types', JSON.stringify(selectedCheckpoints));
-
-        try {
-            const response = await fetch('http://127.0.0.1:5000/analyze_live_frame', {
-                method: 'POST',
-                body: formData,
+        // Handle the stop event (this is where we process the video)
+        mediaRecorderRef.current.onstop = () => {
+            // Create a single Blob from all the chunks
+            const videoBlob = new Blob(recordedChunksRef.current, {
+                type: 'video/webm'
+            });
+            // Create a File object to send to the backend
+            const recordedFile = new File([videoBlob], "live-drill.webm", {
+                type: 'video/webm',
+                lastModified: Date.now()
             });
             
-            setProgress(100);
-            const data = await response.json();
-            setTimeout(() => setLoading(false), 300);
+            // Send this file for analysis
+            handleAnalyze(recordedFile); // Pass the new file to handleAnalyze
+        };
 
-            if (response.ok && data.success) {
-                setFeedback(data.feedback);
-                setImageSource(data.annotated_image_b64 || null);
-                playVoiceReport(data.feedback); 
+        // Start recording
+        mediaRecorderRef.current.start();
+        setIsRecording(true);
+        setFeedback("🔴 Recording... Perform your drill now. Click 'Stop & Analyze' when finished.");
 
-            } else {
-                setFeedback(`Live Analysis Failed: ${data.error || 'Unknown error.'}`);
-                setImageSource(null);
-            }
-        } catch (error) {
-            setFeedback(`Live Network Error: ${error.message}`);
-            setLoading(false);
-        }
-    }, 'image/jpeg', 0.8); 
+    } catch (e) {
+        console.error("Failed to create MediaRecorder:", e);
+        alert("Error starting recorder. Your browser may not support MediaRecorder with this camera.");
+    }
   };
 
-  // --- VIDEO UPLOAD/ANALYSIS FUNCTIONS ---
-  const handleFileChange = (e) => {
-    const uploadedFile = e.target.files[0];
-    setFile(uploadedFile || null);
-    setFeedback(uploadedFile ? `Selected: ${uploadedFile.name}` : 'Select a mode and one or more drills.');
-    if(isLiveMode) stopLiveStream(); 
+  const handleStopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop(); // This triggers the 'onstop' event
+        setIsRecording(false);
+        setLoading(true); // Show loading spinner
+        setFeedback("Recording stopped. Analyzing video...");
+    }
   };
-
-  const handleCheckpointChange = (e) => {
-    const { value, checked } = e.target;
-    setSelectedCheckpoints(prev =>
-      checked ? [...prev, value] : prev.filter(v => v !== value)
-    );
-  };
-
-  const simulateProgress = () => {
-    setProgress(0);
-    const interval = setInterval(() => {
-      setProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          return 100;
-        }
-        return prev + Math.floor(Math.random() * 5 + 1);
-      });
-    }, 300);
-  };
-
-  const handleAnalyze = async () => {
-    if (!file) return alert('Please upload a video.');
+  
+  // 🚨 MODIFIED: handleAnalyze now accepts an optional file (from MediaRecorder)
+  const handleAnalyze = async (recordedFile = null) => {
+    const videoFile = recordedFile || file; // Use recorded file if provided, else use uploaded file
+    
+    if (!videoFile) return alert('Please upload a video or record one.');
     if (selectedCheckpoints.length === 0) return alert('Select at least one drill.');
-    if(isLiveMode) stopLiveStream(); 
+
+    // If this was a recording, stop the camera feed
+    if (recordedFile && isLiveMode) {
+        stopLiveStream();
+    }
 
     setLoading(true);
     simulateProgress();
     setFeedback('Analyzing video...');
 
     const formData = new FormData();
-    formData.append('video', file);
+    formData.append('video', videoFile);
     formData.append('drill_types', JSON.stringify(selectedCheckpoints));
 
     try {
+      // Use the existing video upload endpoint
       const response = await fetch('http://127.0.0.1:5000/upload_and_analyze', {
         method: 'POST',
         body: formData,
@@ -402,6 +367,35 @@ function App() {
       resultsRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   };
+
+  // --- EXISTING VIDEO UPLOAD FUNCTIONS ---
+  const handleFileChange = (e) => {
+    const uploadedFile = e.target.files[0];
+    setFile(uploadedFile || null);
+    setFeedback(uploadedFile ? `Selected: ${uploadedFile.name}` : 'Select a mode and one or more drills.');
+    if(isLiveMode) stopLiveStream(); 
+  };
+
+  const handleCheckpointChange = (e) => {
+    const { value, checked } = e.target;
+    setSelectedCheckpoints(prev =>
+      checked ? [...prev, value] : prev.filter(v => v !== value)
+    );
+  };
+
+  const simulateProgress = () => {
+    setProgress(0);
+    const interval = setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 100) {
+          clearInterval(interval);
+          return 100;
+        }
+        return prev + Math.floor(Math.random() * 5 + 1);
+      });
+    }, 300);
+  };
+
 
   // --- JSX RENDER ---
   return (
@@ -547,7 +541,15 @@ function App() {
           cursor: not-allowed;
         }
         
-        .analyze-section input[type="file"], .live-section input[type="text"] {
+        /* 🚨 NEW: Button for recording */
+        .live-section .record-button {
+            background-color: var(--ncc-red);
+        }
+        .live-section .record-button:hover {
+            background-color: #b91c1c;
+        }
+        
+        .analyze-section input[type="file"] {
           display: block;
           width: 100%;
           padding: 0.75rem;
@@ -556,10 +558,6 @@ function App() {
           background-color: #f9fafb;
           color: var(--text-dark);
           box-sizing: border-box; /* Fix width issue */
-        }
-        .live-section input[type="text"] {
-          text-align: center;
-          font-size: 0.9rem;
         }
 
         .hint {
@@ -570,6 +568,7 @@ function App() {
           /* Allow wrapping for long device lists */
           white-space: pre-wrap;
           word-break: break-all;
+          line-height: 1.4;
         }
         
         /* --- Checkboxes --- */
@@ -617,12 +616,13 @@ function App() {
           box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.07);
           border: 1px solid var(--border-color);
         }
-        .visual-feedback img {
+        .visual-feedback img, .visual-feedback video {
           width: 100%;
           height: auto;
           border-radius: 8px;
           margin-top: 1rem;
           border: 1px solid var(--border-color);
+          background-color: #e5e7eb;
         }
         .analysis-report pre {
           background-color: #0f172a; /* Dark blue */
@@ -700,8 +700,6 @@ function App() {
         }
         `}
       </style>
-
-      {/* 🚨 Removed Background Canvas */}
       
       {/* Header */}
       <header className="app-header">
@@ -726,16 +724,25 @@ function App() {
           <div className="mode-selection">
               <button 
                   className={`mode-button ${!isLiveMode ? 'active' : ''}`}
-                  onClick={stopLiveStream} // Stop live stream if Upload is clicked
+                  onClick={() => {
+                      stopLiveStream(); // Stop live stream if Upload is clicked
+                      setIsLiveMode(false); // Explicitly set mode
+                      setFeedback("Mode set to Upload. Please select a video file.");
+                  }}
               >
                   Upload Video
               </button>
               <button 
                   className={`mode-button ${isLiveMode ? 'active' : ''}`}
-                  // Toggle start/stop
-                  onClick={isLiveMode ? stopLiveStream : startLiveStream} 
+                  onClick={() => {
+                      if (isLiveMode) {
+                          stopLiveStream(); // Stop if already live
+                      } else {
+                          startLiveStream(); // Start if not live
+                      }
+                  }}
               >
-                  {isLiveMode ? 'Stop Live Drill' : 'Start Live Drill'}
+                  {isLiveMode ? 'Turn Off Camera' : 'Start Live Drill'}
               </button>
           </div>
           
@@ -745,14 +752,14 @@ function App() {
           {!isLiveMode ? (
               // Upload Mode
               <div className="analyze-section">
-                  <input type="file" accept="video/mp4,video/avi" onChange={handleFileChange} disabled={loading} />
-                  <button onClick={handleAnalyze} disabled={loading || !file || selectedCheckpoints.length === 0}>
+                  <input type="file" accept="video/mp4,video/webm" onChange={handleFileChange} disabled={loading} />
+                  <button onClick={() => handleAnalyze(null)} disabled={loading || !file || selectedCheckpoints.length === 0}>
                       Analyze Uploaded Video
                   </button>
                   <p className="hint">{file ? `Video Selected: ${file.name}` : 'No Video Selected'}</p>
               </div>
           ) : (
-              // Live Mode (Local/Virtual Webcam)
+              // Live Mode (Local/Virtual Webcam with Recording)
               <div className="live-section">
                   {/* Webcam Feed */}
                   <video 
@@ -769,20 +776,30 @@ function App() {
                       aspectRatio: '16 / 9',
                       marginTop: '1rem'
                     }}
-                    onError={(e) => { 
-                        console.error("Video element error:", e); 
-                        setCameraError("Failed to load video stream."); 
-                        stopLiveStream(); 
-                    }}
                   ></video>
                   
-                  <button onClick={handleLiveAnalyze} disabled={loading || selectedCheckpoints.length === 0 || !isLiveMode}>
-                      Capture & Analyze Frame
-                  </button>
+                  {/* 🚨 NEW: Swappable Record/Stop button */}
+                  {!isRecording ? (
+                    <button 
+                      onClick={handleStartRecording} 
+                      disabled={loading || selectedCheckpoints.length === 0 || !streamRef.current || !!cameraError}
+                    >
+                      Start Recording
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={handleStopRecording} 
+                      disabled={loading}
+                      className="record-button" // Apply red style
+                    >
+                      Stop & Analyze
+                    </button>
+                  )}
+                  
                   <p className="hint">
                       {/* Display enumerated devices for debugging */}
                       {availableDevices.length > 0 && availableDevices.map(d => d.kind === 'videoinput' && d.label ? `[Found: ${d.label}] ` : '').join('')}
-                      {cameraError ? `Camera Setup Error: ${cameraError}` : "Perform drill and click Capture."}
+                      {cameraError ? `Camera Setup Error: ${cameraError}` : "Click 'Start Recording' to begin."}
                   </p>
               </div>
           )}
@@ -792,7 +809,7 @@ function App() {
         <div className="checkbox-grid">
           {DRILL_CHECKPOINTS.map(d => (
             <label key={d.value} className="checkbox-label">
-              <input type="checkbox" value={d.value} onChange={handleCheckpointChange} disabled={loading} />
+              <input type="checkbox" value={d.value} onChange={handleCheckpointChange} disabled={loading || isRecording} />
               {d.label}
             </label>
           ))}
@@ -802,7 +819,7 @@ function App() {
         {loading && (
           <div className="loading-overlay">
             <div className="loading-box">
-              <p>{isLiveMode ? 'Analyzing Frame...' : `Analyzing: ${Math.min(progress, 100)}%`}</p>
+              <p>{isRecording ? 'Recording...' : `Analyzing: ${Math.min(progress, 100)}%`}</p>
               <div className="progress-bar">
                 <div className="progress-fill" style={{ width: `${Math.min(progress, 100)}%` }}></div>
               </div>
