@@ -28,14 +28,19 @@ mp_pose = mp.solutions.pose
 pose = None 
 
 # --- DEFINED CONSTANTS (Tolerances for Drill Accuracy) ---
-FINGER_Y_ALIGNMENT_TOLERANCE = 0.08 # Increased from 0.04
-FINGER_X_ALIGNMENT_TOLERANCE = 0.12 # Increased from 0.06 
-WRIST_RIGIDITY_MIN_ANGLE = 160 
+# 🚨 MODIFIED: Tolerances made VERY STRICT to enforce "touching"
+FINGER_Y_ALIGNMENT_TOLERANCE = 0.03 # Very small vertical tolerance
+FINGER_X_ALIGNMENT_TOLERANCE = 0.04 # Very small horizontal tolerance
+WRIST_RIGIDITY_MIN_ANGLE = 160 # Hand must be flat (Elbow-Wrist-Index angle)
 ELBOW_RAISE_ANGLE_RANGE = (160, 180) # Upper arm and forearm should be nearly straight/rigid
 
-# 🚨 MODIFIED: Head Stability Thresholds (Loosened for real-world use)
-HEAD_STABILITY_VERY_GOOD_THRESHOLD = 0.02 # Increased from 0.01
-HEAD_STABILITY_MODERATE_THRESHOLD = 0.05 # Increased from 0.03
+# Head Stability Thresholds
+HEAD_STABILITY_VERY_GOOD_THRESHOLD = 0.02 
+HEAD_STABILITY_MODERATE_THRESHOLD = 0.05 
+
+# 🚨 NEW: Left Hand Stability Thresholds (Slightly looser than head)
+LEFT_HAND_STABILITY_VERY_GOOD_THRESHOLD = 0.03
+LEFT_HAND_STABILITY_MODERATE_THRESHOLD = 0.06
 
 # --- LAZY INITIALIZATION HELPER FUNCTION ---
 def _get_pose_model():
@@ -80,11 +85,13 @@ def draw_and_annotate(image, landmarks, fail_points, drill_name):
         R_EAR = mp_pose.PoseLandmark.RIGHT_EAR.value
         
         if R_INDEX < len(landmarks.landmark) and R_EYE_OUTER < len(landmarks.landmark) and R_EAR < len(landmarks.landmark):
+            # Show red circle at the incorrect finger position
             cv2.circle(annotated_image, (int(landmarks.landmark[R_INDEX].x * w), int(landmarks.landmark[R_INDEX].y * h)), 10, RED, -1)
+            # Show green target zone at the eyebrow
             target_x = int(((landmarks.landmark[R_EYE_OUTER].x + landmarks.landmark[R_EAR].x) / 2) * w)
             target_y = int(landmarks.landmark[R_EYE_OUTER].y * h)
-            # Draw a larger green target zone to reflect new tolerance
-            cv2.circle(annotated_image, (target_x, target_y), int(FINGER_X_ALIGNMENT_TOLERANCE * w / 2), GREEN, 2)
+            # Draw a very small green target circle
+            cv2.circle(annotated_image, (target_x, target_y), int(FINGER_X_ALIGNMENT_TOLERANCE * w), GREEN, 2)
             fail_message += "Placement Fail "
         
     if 'HAND_FORM' in fail_points:
@@ -108,6 +115,14 @@ def draw_and_annotate(image, landmarks, fail_points, drill_name):
             cv2.line(annotated_image, (int(landmarks.landmark[R_SHOULDER].x * w), int(landmarks.landmark[R_SHOULDER].y * h)), 
                      (int(landmarks.landmark[R_ELBOW].x * w), int(landmarks.landmark[R_ELBOW].y * h)), RED, 5) 
             fail_message += "Elbow Angle Fail"
+            
+    # 🚨 NEW: Highlight Left Hand if it fails stability (Note: fail_points comes from video summary,
+    # so this will only show on the final summary image if 'LEFT_HAND_STABILITY' is a fail point)
+    if 'LEFT_HAND_STABILITY' in fail_points:
+        L_WRIST = mp_pose.PoseLandmark.LEFT_WRIST.value
+        if L_WRIST < len(landmarks.landmark):
+            cv2.circle(annotated_image, (int(landmarks.landmark[L_WRIST].x * w), int(landmarks.landmark[L_WRIST].y * h)), 15, RED, 3)
+            fail_message += "Left Hand Unstable "
         
     cv2.putText(annotated_image, f"{drill_name}: {fail_message}", (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, WHITE, 2, cv2.LINE_AA)
     
@@ -128,9 +143,10 @@ def _get_salute_posture_feedback(landmarks, mp_pose_module):
     R_ELBOW = mp_pose_module.PoseLandmark.RIGHT_ELBOW
     R_WRIST = mp_pose_module.PoseLandmark.RIGHT_WRIST
     R_INDEX = mp_pose_module.PoseLandmark.RIGHT_INDEX
-    R_NOSE = mp_pose_module.PoseLandmark.NOSE # 🚨 NEW: Added NOSE for stability check
+    R_NOSE = mp_pose_module.PoseLandmark.NOSE
+    L_WRIST = mp_pose_module.PoseLandmark.LEFT_WRIST # 🚨 NEW: Add left wrist
 
-    required_landmarks = [R_EAR, R_EYE_OUTER, R_SHOULDER, R_ELBOW, R_WRIST, R_INDEX, R_NOSE]
+    required_landmarks = [R_EAR, R_EYE_OUTER, R_SHOULDER, R_ELBOW, R_WRIST, R_INDEX, R_NOSE, L_WRIST]
     
     # Check visibility
     for lmk_enum in required_landmarks:
@@ -144,10 +160,11 @@ def _get_salute_posture_feedback(landmarks, mp_pose_module):
     r_elbow = (lm[R_ELBOW.value].x, lm[R_ELBOW.value].y)
     r_wrist = (lm[R_WRIST.value].x, lm[R_WRIST.value].y)
     r_index = (lm[R_INDEX.value].x, lm[R_INDEX.value].y)
+    # Note: Left wrist and nose are extracted in the video loop for stability tracking
 
     fail_points = []
     
-    # 1. FINGER PLACEMENT CHECK (Uses updated, larger tolerances)
+    # 1. FINGER PLACEMENT CHECK (Uses new tightened tolerances)
     target_y = right_eye_outer[1]
     target_x = (right_eye_outer[0] + right_ear[0]) / 2
     
@@ -202,11 +219,11 @@ def analyze_salute_frame(frame_rgb, analysis_dir):
         _, buffer = cv2.imencode('.jpg', annotated_image)
         image_b64_data = [f"data:image/jpeg;base64,{base64.b64encode(buffer).decode('utf-8')}"]
 
-        # 🚨 MODIFIED: Added note about stability check
+        # 🚨 MODIFIED: Added note about stability checks
         if not fail_points:
-            feedback_text = "🌟 **Perfect Salute!** Hold the position. (Head stability analyzed in video mode)"
+            feedback_text = "🌟 **Perfect Salute!** Hold the position. (Head/Hand stability analyzed in video mode)"
         else:
-            feedback_text = f"❌ **Error!** Fix highlighted areas: {', '.join(fail_points).replace('_', ' ')}. (Head stability analyzed in video mode)"
+            feedback_text = f"❌ **Error!** Fix highlighted areas: {', '.join(fail_points).replace('_', ' ')}. (Head/Hand stability analyzed in video mode)"
         
         return {"image_b64_array": image_b64_data, "feedback": feedback_text}
         
@@ -228,8 +245,9 @@ def analyze_salute(video_path, analysis_dir):
     hand_form_succeeded = False
     elbow_raise_succeeded = False
     
-    # 🚨 NEW: List to store head positions during the salute
+    # 🚨 NEW: Lists to store head and left hand positions
     head_positions = []
+    left_wrist_positions = []
 
     best_failure_frame_image = None
     best_success_frame_image = None
@@ -256,10 +274,14 @@ def analyze_salute(video_path, analysis_dir):
                 
                 found_valid_pose = True
                 
-                # 🚨 NEW: Store head position if salute pose is active
+                # 🚨 NEW: Store head and left wrist positions if pose is active
                 nose_lmk = results.pose_landmarks.landmark[mp_pose.PoseLandmark.NOSE.value]
+                left_wrist_lmk = results.pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_WRIST.value]
+                
                 if nose_lmk.visibility > 0.5:
                     head_positions.append((nose_lmk.x, nose_lmk.y))
+                if left_wrist_lmk.visibility > 0.5:
+                    left_wrist_positions.append((left_wrist_lmk.x, left_wrist_lmk.y))
 
                 # Update cumulative success tracking
                 if success_flags['finger_placement']: finger_placement_succeeded = True
@@ -280,14 +302,14 @@ def analyze_salute(video_path, analysis_dir):
     finally:
         cap.release()
 
-    # --- Head Stability Calculation ---
+    # --- Stability Calculations ---
+    
+    # Head Stability
     head_stability_feedback = "✅ Head Stability: Not enough data."
     if len(head_positions) > 10: # Require at least 10 frames of data
         x_coords = [pos[0] for pos in head_positions]
         y_coords = [pos[1] for pos in head_positions]
-        std_dev_x = np.std(x_coords)
-        std_dev_y = np.std(y_coords)
-        total_deviation = std_dev_x + std_dev_y # Simple deviation metric
+        total_deviation = np.std(x_coords) + np.std(y_coords) # Simple deviation metric
 
         if total_deviation <= HEAD_STABILITY_VERY_GOOD_THRESHOLD:
             head_stability_feedback = "✅ Head Stability: Properly stable (Very Good)."
@@ -298,6 +320,22 @@ def analyze_salute(video_path, analysis_dir):
     elif found_valid_pose:
         head_stability_feedback = "✅ Head Stability: Pose held too briefly to measure."
 
+    # 🚨 NEW: Left Hand Stability
+    left_hand_stability_feedback = "✅ Left Hand: Not enough data."
+    if len(left_wrist_positions) > 10:
+        x_coords = [pos[0] for pos in left_wrist_positions]
+        y_coords = [pos[1] for pos in left_wrist_positions]
+        total_deviation = np.std(x_coords) + np.std(y_coords)
+
+        if total_deviation <= LEFT_HAND_STABILITY_VERY_GOOD_THRESHOLD:
+            left_hand_stability_feedback = "✅ Left Hand: Properly stable (Very Good)."
+        elif total_deviation <= LEFT_HAND_STABILITY_MODERATE_THRESHOLD:
+            left_hand_stability_feedback = "⚠️ Left Hand: Moderately stable (Keep improving)."
+        else:
+            left_hand_stability_feedback = "❌ Left Hand: Moving too much (Kindly work on that)."
+    elif found_valid_pose:
+        left_hand_stability_feedback = "✅ Left Hand: Pose held too briefly to measure."
+
 
     # --- Compile Final Report ---
     if not found_valid_pose:
@@ -307,6 +345,9 @@ def analyze_salute(video_path, analysis_dir):
     if not finger_placement_succeeded: final_fail_points.append('FINGER_POS')
     if not hand_form_succeeded: final_fail_points.append('HAND_FORM')
     if not elbow_raise_succeeded: final_fail_points.append('ELBOW_RAISE')
+    # Add stability failures to the *overall* fail list
+    if "❌" in head_stability_feedback: final_fail_points.append('HEAD_STABILITY')
+    if "❌" in left_hand_stability_feedback: final_fail_points.append('LEFT_HAND_STABILITY')
     
     overall_correct = not final_fail_points
     
@@ -322,7 +363,7 @@ def analyze_salute(video_path, analysis_dir):
         fail_points_for_annotation = best_failure_points_for_frame
     elif last_known_landmarks is not None and 'image' in locals(): # Fallback to last frame
         frame_to_use_for_annotation = image 
-        fail_points_for_annotation = final_fail_points
+        fail_points_for_annotation = final_fail_points # Show all cumulative failures
     
     # Generate the text report
     feedback_lines = []
@@ -338,7 +379,8 @@ def analyze_salute(video_path, analysis_dir):
     feedback_lines.append(f"✅ Finger Placement: {'Achieved' if finger_placement_succeeded else '❌ FAIL - Index finger was off target.'}")
     feedback_lines.append(f"✅ Hand Form: {'Rigid' if hand_form_succeeded else '❌ FAIL - Lock your wrist and join fingers.'}")
     feedback_lines.append(f"✅ Arm Rigidity: {'Correct' if elbow_raise_succeeded else '❌ FAIL - Elbow was too bent.'}")
-    feedback_lines.append(f"{head_stability_feedback}") # 🚨 NEW: Added stability feedback
+    feedback_lines.append(f"{head_stability_feedback}") # Added stability feedback
+    feedback_lines.append(f"{left_hand_stability_feedback}") # 🚨 NEW: Added left hand stability feedback
          
     final_text_report = "\n".join(feedback_lines)
     
@@ -350,4 +392,3 @@ def analyze_salute(video_path, analysis_dir):
 
 
     return {"image_b64_array": image_b64_data, "feedback": final_text_report}
-
